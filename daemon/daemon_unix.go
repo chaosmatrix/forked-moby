@@ -1521,3 +1521,31 @@ func (daemon *Daemon) setupSeccompProfile() error {
 	}
 	return nil
 }
+
+// get interface min network mtu
+func getInterfaceMinNetworkMtu() int {
+	defaultMaxNetworkMtu := 2 << 15
+	defaultMinNetworkMtu := 68
+	minNetworkMtu := defaultMaxNetworkMtu
+	handler, err := netlink.NewHandle(netlink.FAMILY_ALL)
+	if err != nil {
+		return config.DefaultNetworkMtu
+	}
+	links, err := handler.LinkList()
+	if err != nil {
+		return config.DefaultNetworkMtu
+	}
+	for _, link := range links {
+		attrs := link.Attrs()
+		if attrs != nil && attrs.Flags&0x1 == net.FlagUp {
+			if attrs.MTU < minNetworkMtu && attrs.MTU > defaultMinNetworkMtu {
+				minNetworkMtu = attrs.MTU
+			}
+		}
+	}
+	if minNetworkMtu == defaultMaxNetworkMtu {
+		// if all links down
+		return config.DefaultNetworkMtu
+	}
+	return minNetworkMtu
+}

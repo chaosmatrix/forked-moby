@@ -664,3 +664,8 @@ func (daemon *Daemon) initRuntimes(_ map[string]types.Runtime) error {
 
 func setupResolvConf(config *config.Config) {
 }
+
+// get interface min network mtu
+func getInterfaceMinNetworkMtu() int {
+	return config.DefaultNetworkMtu
+}
