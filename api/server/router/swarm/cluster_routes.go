@@ -28,10 +28,15 @@ func (sr *swarmRouter) initCluster(ctx context.Context, w http.ResponseWriter, r
 		return errdefs.InvalidParameter(err)
 	}
 	version := httputils.VersionFromContext(ctx)
+
 	// DefaultAddrPool and SubnetSize were added in API 1.39. Ignore on older API versions.
 	if versions.LessThan(version, "1.39") {
 		req.DefaultAddrPool = nil
 		req.SubnetSize = 0
+	}
+	// DataPathPort was added in API 1.40. Ignore this option on older API versions.
+	if versions.LessThan(version, "1.40") {
+		req.DataPathPort = 0
 	}
 	nodeID, err := sr.backend.Init(req)
 	if err != nil {
@@ -162,7 +167,19 @@ func (sr *swarmRouter) getServices(ctx context.Context, w http.ResponseWriter, r
 		return errdefs.InvalidParameter(err)
 	}
 
-	services, err := sr.backend.GetServices(basictypes.ServiceListOptions{Filters: filter})
+	// the status query parameter is only support in API versions >= 1.41. If
+	// the client is using a lesser version, ignore the parameter.
+	cliVersion := httputils.VersionFromContext(ctx)
+	var status bool
+	if value := r.URL.Query().Get("status"); value != "" && !versions.LessThan(cliVersion, "1.41") {
+		var err error
+		status, err = strconv.ParseBool(value)
+		if err != nil {
+			return errors.Wrapf(errdefs.InvalidParameter(err), "invalid value for status: %s", value)
+		}
+	}
+
+	services, err := sr.backend.GetServices(basictypes.ServiceListOptions{Filters: filter, Status: status})
 	if err != nil {
 		logrus.Errorf("Error getting services: %v", err)
 		return err
@@ -173,14 +190,20 @@ func (sr *swarmRouter) getServices(ctx context.Context, w http.ResponseWriter, r
 
 func (sr *swarmRouter) getService(ctx context.Context, w http.ResponseWriter, r *http.Request, vars map[string]string) error {
 	var insertDefaults bool
+
 	if value := r.URL.Query().Get("insertDefaults"); value != "" {
 		var err error
 		insertDefaults, err = strconv.ParseBool(value)
 		if err != nil {
-			err := fmt.Errorf("invalid value for insertDefaults: %s", value)
 			return errors.Wrapf(errdefs.InvalidParameter(err), "invalid value for insertDefaults: %s", value)
 		}
 	}
+
+	// you may note that there is no code here to handle the "status" query
+	// parameter, as in getServices. the Status field is not supported when
+	// retrieving an individual service because the Backend API changes
+	// required to accommodate it would be too disruptive, and because that
+	// field is so rarely needed as part of an individual service inspection.
 
 	service, err := sr.backend.GetService(vars["id"], insertDefaults)
 	if err != nil {
@@ -208,13 +231,7 @@ func (sr *swarmRouter) createService(ctx context.Context, w http.ResponseWriter,
 		if versions.LessThan(cliVersion, "1.30") {
 			queryRegistry = true
 		}
-		if versions.LessThan(cliVersion, "1.40") {
-			if service.TaskTemplate.ContainerSpec != nil {
-				// Sysctls for docker swarm services weren't supported before
-				// API version 1.40
-				service.TaskTemplate.ContainerSpec.Sysctls = nil
-			}
-		}
+		adjustForAPIVersion(cliVersion, &service)
 	}
 
 	resp, err := sr.backend.CreateService(service, encodedAuth, queryRegistry)
@@ -254,13 +271,7 @@ func (sr *swarmRouter) updateService(ctx context.Context, w http.ResponseWriter,
 		if versions.LessThan(cliVersion, "1.30") {
 			queryRegistry = true
 		}
-		if versions.LessThan(cliVersion, "1.40") {
-			if service.TaskTemplate.ContainerSpec != nil {
-				// Sysctls for docker swarm services weren't supported before
-				// API version 1.40
-				service.TaskTemplate.ContainerSpec.Sysctls = nil
-			}
-		}
+		adjustForAPIVersion(cliVersion, &service)
 	}
 
 	resp, err := sr.backend.UpdateService(vars["id"], version, service, flags, queryRegistry)
